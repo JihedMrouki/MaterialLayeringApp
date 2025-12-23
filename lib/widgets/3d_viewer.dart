@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:dot_matrix/models/mesh_3d.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:three_dart/three_dart.dart' as three;
@@ -28,11 +30,13 @@ class ThreeDViewer extends StatefulWidget {
 }
 
 class _ThreeDViewerState extends State<ThreeDViewer> {
+  late FlutterGlPlugin three3dRender;
+  three.WebGLRenderer? renderer;
+
   late three.Scene scene;
   late three.PerspectiveCamera camera;
-  late three.WebGLRenderer renderer;
-  late three.Mesh meshObject;
-  late three.LineSegments pathLines;
+  three.Mesh? meshObject;
+  three.LineSegments? pathLines;
   late three.Group dotsGroup;
   late three.Raycaster raycaster;
   late three.Vector2 mouse;
@@ -42,39 +46,109 @@ class _ThreeDViewerState extends State<ThreeDViewer> {
   bool isDragging = false;
   double zoomLevel = 1.0;
 
+  Size? screenSize;
+  late double width;
+  late double height;
+  double dpr = 1.0;
+
+  dynamic sourceTexture;
+  late three.WebGLRenderTarget renderTarget;
+
   @override
   void initState() {
     super.initState();
-    _initScene();
   }
 
-  bool _isInitialized = false;
+  Future<void> initPlatformState() async {
+    width = screenSize!.width;
+    height = screenSize!.height;
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (!_isInitialized) {
-      _updateCameraSize();
-      _updateScene();
-      _isInitialized = true;
+    three3dRender = FlutterGlPlugin();
+
+    Map<String, dynamic> options = {
+      "antialias": true,
+      "alpha": false,
+      "width": width.toInt(),
+      "height": height.toInt(),
+      "dpr": dpr
+    };
+
+    await three3dRender.initialize(options: options);
+
+    setState(() {});
+
+    Future.delayed(const Duration(milliseconds: 200), () async {
+      await three3dRender.prepareContext();
+
+      // Wait for GL context to be fully ready
+      if (three3dRender.gl != null) {
+        initScene();
+      }
+    });
+  }
+
+  initSize(BuildContext context) {
+    if (screenSize != null) {
+      return;
+    }
+
+    final mqd = MediaQuery.of(context);
+    screenSize = mqd.size;
+    dpr = mqd.devicePixelRatio;
+
+    initPlatformState();
+  }
+
+  void initRenderer() {
+    if (three3dRender.gl == null) {
+      print('GL context not ready, cannot initialize renderer');
+      return;
+    }
+
+    Map<String, dynamic> options = {
+      "width": width,
+      "height": height,
+      "gl": three3dRender.gl,
+      "antialias": true,
+      "canvas": three3dRender.element
+    };
+
+    try {
+      renderer = three.WebGLRenderer(options);
+      renderer!.setPixelRatio(dpr);
+      renderer!.setSize(width, height, false);
+      renderer!.shadowMap.enabled = true;
+
+      if (!kIsWeb) {
+        var pars = three.WebGLRenderTargetOptions({
+          "minFilter": three.LinearFilter,
+          "magFilter": three.LinearFilter,
+          "format": three.RGBAFormat
+        });
+        renderTarget = three.WebGLRenderTarget(
+            (width * dpr).toInt(), (height * dpr).toInt(), pars);
+        renderer!.setRenderTarget(renderTarget);
+        sourceTexture = renderer!.getRenderTargetGLTexture(renderTarget);
+      }
+    } catch (e) {
+      print('Error initializing renderer: $e');
     }
   }
 
-  void _initScene() {
+  void initScene() {
+    initRenderer();
+
     scene = three.Scene();
     scene.background = three.Color(0x0a0e27);
 
     camera = three.PerspectiveCamera(
       75,
-      1.0, // Will be updated in didChangeDependencies
+      width / height,
       0.1,
       10000,
     );
     camera.position.set(0, 0, 5);
     camera.lookAt(three.Vector3(0, 0, 0));
-
-    renderer = three.WebGLRenderer({'antialias': true});
-    renderer.shadowMap.enabled = true;
 
     // Lighting
     final ambientLight = three.AmbientLight(0xffffff, 0.6);
@@ -98,23 +172,8 @@ class _ThreeDViewerState extends State<ThreeDViewer> {
     dotsGroup = three.Group();
     scene.add(dotsGroup);
 
+    _updateScene();
     _animate();
-  }
-
-  void _updateCameraSize() {
-    if (!mounted) return;
-
-    final size = MediaQuery.maybeOf(context)?.size;
-    if (size == null) return;
-
-    final width = size.width;
-    final height = size.height;
-
-    if (width <= 0 || height <= 0) return;
-
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-    renderer.setSize(width, height);
   }
 
   void _updateScene() {
@@ -174,11 +233,12 @@ class _ThreeDViewerState extends State<ThreeDViewer> {
       'side': three.DoubleSide,
     });
 
-    meshObject = three.Mesh(geometry, material);
-    meshObject.name = 'stl-mesh';
-    meshObject.castShadow = true;
-    meshObject.receiveShadow = true;
-    scene.add(meshObject);
+    final mesh = three.Mesh(geometry, material);
+    mesh.name = 'stl-mesh';
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+    meshObject = mesh;
   }
 
   void _addPath() {
@@ -209,9 +269,10 @@ class _ThreeDViewerState extends State<ThreeDViewer> {
       'opacity': 0.7,
     });
 
-    pathLines = three.LineSegments(lineGeometry, lineMaterial);
-    pathLines.name = 'path-lines';
-    scene.add(pathLines);
+    final lines = three.LineSegments(lineGeometry, lineMaterial);
+    lines.name = 'path-lines';
+    scene.add(lines);
+    pathLines = lines;
   }
 
   void _updateDots() {
@@ -225,7 +286,6 @@ class _ThreeDViewerState extends State<ThreeDViewer> {
     final sphereMaterial = three.MeshStandardMaterial({
       'color': 0xff006e,
       'emissive': 0xff006e,
-      'emissiveIntensity': 0.3,
     });
 
     for (int i = 0; i < widget.path.length; i++) {
@@ -241,13 +301,22 @@ class _ThreeDViewerState extends State<ThreeDViewer> {
   }
 
   void _animate() {
-    renderer.render(scene, camera);
+    if (!mounted || renderer == null) return;
 
     // Auto-rotation when not dragging
     if (!isDragging) {
-      meshObject.rotation.y += 0.002;
+      meshObject?.rotation.y += 0.002;
       dotsGroup.rotation.y += 0.002;
-      pathLines.rotation.y += 0.002;
+      pathLines?.rotation.y += 0.002;
+    }
+
+    renderer!.render(scene, camera);
+
+    final gl = three3dRender.gl;
+    gl.flush();
+
+    if (!kIsWeb) {
+      three3dRender.updateTexture(sourceTexture);
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -269,12 +338,12 @@ class _ThreeDViewerState extends State<ThreeDViewer> {
     rotationY += event.delta.dx * 0.005;
     rotationX += event.delta.dy * 0.005;
 
-    meshObject.rotation.x = rotationX;
-    meshObject.rotation.y = rotationY;
+    meshObject?.rotation.x = rotationX;
+    meshObject?.rotation.y = rotationY;
     dotsGroup.rotation.x = rotationX;
     dotsGroup.rotation.y = rotationY;
-    pathLines.rotation.x = rotationX;
-    pathLines.rotation.y = rotationY;
+    pathLines?.rotation.x = rotationX;
+    pathLines?.rotation.y = rotationY;
   }
 
   void _handleScroll(PointerScrollEvent event) {
@@ -297,12 +366,14 @@ class _ThreeDViewerState extends State<ThreeDViewer> {
 
   @override
   void dispose() {
-    renderer.dispose();
+    renderer?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    initSize(context);
+
     return Listener(
       onPointerDown: _handleMouseDown,
       onPointerUp: _handleMouseUp,
@@ -313,39 +384,68 @@ class _ThreeDViewerState extends State<ThreeDViewer> {
         }
       },
       child: Container(
-        color: const Color(0x000a0e27),
+        color: const Color(0xFF0a0e27),
         child: Stack(
           children: [
-            // Three.js canvas would go here
-            // For now, using placeholder
-            Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.view_in_ar,
-                    size: 80,
-                    color: Colors.grey[700],
-                  ),
-                  const SizedBox(height: 20),
-                  Text(
-                    'Load STL to view 3D model',
-                    style: TextStyle(
-                      color: Colors.grey[500],
-                      fontSize: 16,
+            // Three.js canvas
+            screenSize != null
+                ? SizedBox(
+                    width: width,
+                    height: height,
+                    child: three3dRender.isInitialized
+                        ? (kIsWeb
+                            ? HtmlElementView(
+                                viewType: three3dRender.textureId!.toString())
+                            : Texture(textureId: three3dRender.textureId!))
+                        : Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.view_in_ar,
+                                  size: 80,
+                                  color: Colors.grey[700],
+                                ),
+                                const SizedBox(height: 20),
+                                Text(
+                                  'Initializing 3D viewer...',
+                                  style: TextStyle(
+                                    color: Colors.grey[500],
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                  )
+                : Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.view_in_ar,
+                          size: 80,
+                          color: Colors.grey[700],
+                        ),
+                        const SizedBox(height: 20),
+                        Text(
+                          'Load STL to view 3D model',
+                          style: TextStyle(
+                            color: Colors.grey[500],
+                            fontSize: 16,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Points loaded: ${widget.path.length}',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Points loaded: ${widget.path.length}',
-                    style: TextStyle(
-                      color: Colors.grey[600],
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
-            ),
             // Controls overlay
             Positioned(
               top: 20,
@@ -353,10 +453,10 @@ class _ThreeDViewerState extends State<ThreeDViewer> {
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0x000f1436).withOpacity(0.9),
+                  color: const Color(0xFF0f1436).withAlpha(230),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: const Color(0x0000d9ff).withOpacity(0.3),
+                    color: const Color(0xFF00d9ff).withAlpha(76),
                   ),
                 ),
                 child: Column(

@@ -5,7 +5,11 @@
       "Bash(flutter pub:*)",
       "Bash(flutter build:*)",
       "Bash(dir:*)",
-      "Bash(flutter clean:*)"
+      "Bash(flutter clean:*)",
+      "Bash(flutter doctor:*)",
+      "Bash(flutter run:*)",
+      "Bash(q)",
+      "Bash(mkdir:*)"
     ]
   }
 }

@@ -68,6 +68,7 @@ class _ControlPanelState extends State<ControlPanel> {
                     : const Icon(Icons.upload_file),
                 label: Text(
                   widget.isLoading ? 'Loading...' : 'Load STL File',
+                  style: const TextStyle(color: Colors.white),
                 ),
                 style: ElevatedButton.styleFrom(
                   minimumSize: const Size(double.infinity, 48),
@@ -163,7 +164,10 @@ class _ControlPanelState extends State<ControlPanel> {
               ElevatedButton.icon(
                 onPressed: widget.onExport,
                 icon: const Icon(Icons.download),
-                label: const Text('Export Path'),
+                label: const Text(
+                  'Export Path',
+                  style: TextStyle(color: Colors.white),
+                ),
                 style: ElevatedButton.styleFrom(
                   minimumSize: const Size(double.infinity, 44),
                   backgroundColor: Theme.of(context).colorScheme.primary,
